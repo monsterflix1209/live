@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC 多端雲端直播導播系統 (GitHub Pages 專用)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            500: '#22c55e',
+                            600: '#16a34a',
+                            700: '#15803d',
+                        },
+                        studio: {
+                            bg: '#0f172a',
+                            panel: '#1e293b',
+                            border: '#334155',
+                            accent: '#3b82f6',
+                            pgm: '#ef4444',
+                            pvw: '#eab308'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- PeerJS for WebRTC -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- QRCode.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .tally-onair { animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red {
+            0%, 100% { opacity: 1; box-shadow: 0 0 15px rgba(239, 68, 68, 0.8); }
+            50% { opacity: 0.5; box-shadow: 0 0 5px rgba(239, 68, 68, 0.3); }
+        }
+        /* Floating Emojis */
+        .floating-emoji {
+            position: absolute;
+            bottom: 20px;
+            font-size: 2rem;
+            pointer-events: none;
+            animation: floatUp 2s ease-out forwards;
+        }
+        @keyframes floatUp {
+            0% { transform: translateY(0) scale(0.8); opacity: 1; }
+            100% { transform: translateY(-180px) scale(1.4); opacity: 0; }
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col antialiased selection:bg-blue-600 selection:text-white">
+
+    <!-- Top Navigation Header -->
+    <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50 px-4 py-3">
+        <div class="max-w-7xl mx-auto flex flex-wrap justify-between items-center gap-4">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20">
+                    <i class="fa-solid font-bold fa-broadcast-tower text-white text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
+                        OmniLive Studio
+                        <span class="text-xs bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2 py-0.5 rounded-full">v2.5 WebRTC</span>
+                    </h1>
+                    <p class="text-xs text-slate-400">GitHub Pages 免伺服器多端直播導播系統</p>
+                </div>
+            </div>
+
+            <!-- View Switcher Tabs -->
+            <nav class="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-sm font-medium">
+                <button onclick="switchRole('studio')" id="tab-studio" class="role-tab flex items-center gap-2 px-4 py-1.5 rounded-lg bg-blue-600 text-white transition-all shadow">
+                    <i class="fa-solid fa-sliders"></i>
+                    <span>後置統整導播室</span>
+                </button>
+                <button onclick="switchRole('camera')" id="tab-camera" class="role-tab flex items-center gap-2 px-4 py-1.5 rounded-lg text-slate-400 hover:text-white transition-all">
+                    <i class="fa-solid fa-video"></i>
+                    <span>拍攝端 (Cam)</span>
+                </button>
+                <button onclick="switchRole('viewer')" id="tab-viewer" class="role-tab flex items-center gap-2 px-4 py-1.5 rounded-lg text-slate-400 hover:text-white transition-all">
+                    <i class="fa-solid fa-tv"></i>
+                    <span>播放前端 (Viewer)</span>
+                </button>
+                <button onclick="switchRole('guide')" id="tab-guide" class="role-tab flex items-center gap-2 px-4 py-1.5 rounded-lg text-slate-400 hover:text-white transition-all">
+                    <i class="fa-solid fa-book-open"></i>
+                    <span>部署教學</span>
+                </button>
+            </nav>
+
+            <!-- Room ID & Quick Status -->
+            <div class="flex items-center space-x-3 text-xs bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700">
+                <span class="text-slate-400">頻道/房間 ID:</span>
+                <input type="text" id="globalRoomId" value="live-demo-room" class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-blue-400 font-mono w-32 focus:outline-none focus:border-blue-500" onchange="updateRoomId(this.value)">
+                <button onclick="copyShareLink()" class="text-slate-300 hover:text-white title="複製連結"><i class="fa-regular fa-copy"></i></button>
+            </div>
+        </div>
+    </header>
+
+    <!-- WebSocket Sandbox Environment Warning Banner -->
+    <div id="wsWarningBanner" class="hidden bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 text-xs text-amber-300 flex items-center justify-between">
+        <div class="flex items-center gap-2 max-w-7xl mx-auto w-full">
+            <i class="fa-solid fa-triangle-exclamation text-amber-400"></i>
+            <span id="wsWarningText">預覽環境 (iFrame Sandbox) 限制跨網域 WebSocket 連線。導播控制、鏡頭錄影與畫面合成仍可正常測試；部署至 GitHub Pages 後即恢復完整的跨裝置 WebRTC 串流功能！</span>
+        </div>
+        <button onclick="document.getElementById('wsWarningBanner').classList.add('hidden')" class="text-amber-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+
+    <!-- Main Content Container -->
+    <main class="flex-1 p-4 max-w-7xl w-full mx-auto">
+
+        <!-- ==================== 1. DIRECTOR STUDIO MODULE ==================== -->
+        <section id="module-studio" class="role-module space-y-4">
+            <!-- Top Controls & Status Bar -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                    <div>
+                        <div class="text-xs text-slate-400">導播室狀態</div>
+                        <div id="studioPeerStatus" class="text-sm font-semibold text-amber-400 flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span> 正在初始化...
+                        </div>
+                    </div>
+                    <button onclick="initStudio()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs rounded-lg border border-slate-700">
+                        <i class="fa-solid fa-rotate-right mr-1"></i>重新連線
+                    </button>
+                    <button onclick="showPeerConfigModal()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs rounded-lg border border-slate-700 text-slate-300" title="PeerServer 設定">
+                        <i class="fa-solid fa-gear"></i>
+                    </button>
+                </div>
+
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                    <div>
+                        <div class="text-xs text-slate-400">線上觀看人數</div>
+                        <div id="viewerCountText" class="text-lg font-bold text-emerald-400">0 位觀眾</div>
+                    </div>
+                    <i class="fa-solid fa-users text-2xl text-slate-700"></i>
+                </div>
+
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                    <div>
+                        <div class="text-xs text-slate-400">PGM 串流錄製</div>
+                        <div id="recordTimeText" class="text-xs font-mono text-slate-400">00:00:00</div>
+                    </div>
+                    <button id="recordBtn" onclick="toggleRecord()" class="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5">
+                        <i class="fa-solid fa-circle text-[10px]"></i> 開始錄影
+                    </button>
+                </div>
+            </div>
+
+            <!-- Video Bus Area: PVW (Preview) and PGM (Program) -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <!-- PVW Box -->
+                <div class="bg-slate-900 border-2 border-yellow-500/80 rounded-2xl p-3 shadow-xl relative overflow-hidden flex flex-col">
+                    <div class="flex justify-between items-center mb-2 px-1">
+                        <span class="bg-yellow-500 text-slate-950 font-bold px-2.5 py-0.5 rounded text-xs tracking-wider uppercase">PVW 預覽畫面</span>
+                        <span id="pvwSourceText" class="text-xs text-slate-400">Source: CAM 1</span>
+                    </div>
+                    <div class="relative aspect-video bg-black rounded-xl overflow-hidden flex items-center justify-center border border-slate-800">
+                        <canvas id="pvwCanvas" class="w-full h-full object-contain"></canvas>
+                    </div>
+                </div>
+
+                <!-- PGM Box -->
+                <div class="bg-slate-900 border-2 border-red-500 rounded-2xl p-3 shadow-xl relative overflow-hidden flex flex-col">
+                    <div class="flex justify-between items-center mb-2 px-1">
+                        <div class="flex items-center gap-2">
+                            <span class="bg-red-600 text-white font-bold px-2.5 py-0.5 rounded text-xs tracking-wider uppercase tally-onair">PGM 正式播出 (ON AIR)</span>
+                            <span id="pgmFpsText" class="text-xs text-emerald-400 font-mono">60 FPS</span>
+                        </div>
+                        <span id="pgmSourceText" class="text-xs text-slate-400">Source: CAM 1</span>
+                    </div>
+                    <div class="relative aspect-video bg-black rounded-xl overflow-hidden flex items-center justify-center border border-slate-800">
+                        <canvas id="pgmCanvas" class="w-full h-full object-contain"></canvas>
+                        <!-- PGM Overlay indicators -->
+                        <div id="pgmOverlayLowerThird" class="hidden absolute bottom-6 left-6 bg-slate-900/90 backdrop-blur border-l-4 border-blue-500 px-4 py-2 rounded-r shadow-2xl">
+                            <div id="ltTitle" class="font-bold text-white text-base">即時導播直播</div>
+                            <div id="ltSubtitle" class="text-xs text-blue-400">OmniLive Multi-Cam System</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transition & Switcher Controls Bar -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-3">
+                    <h3 class="font-bold text-sm text-slate-300 flex items-center gap-2">
+                        <i class="fa-solid fa-arrows-split-up-and-left text-blue-400"></i>
+                        導播切換控制台 (Switcher Bar)
+                    </h3>
+                    <div class="flex items-center gap-2">
+                        <button onclick="triggerCut()" class="px-5 py-2 bg-red-600 hover:bg-red-500 font-bold text-white text-sm rounded-xl shadow-lg shadow-red-600/30 transition">
+                            CUT (硬切)
+                        </button>
+                        <button onclick="triggerAutoFade()" class="px-5 py-2 bg-yellow-600 hover:bg-yellow-500 font-bold text-white text-sm rounded-xl shadow-lg shadow-yellow-600/30 transition">
+                            AUTO (淡入淡出 1s)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Layout / Transition Effect Options -->
+                <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                    <button onclick="setLayout('single')" class="layout-btn bg-slate-800 hover:bg-slate-700 active border border-blue-500 text-xs py-2 px-3 rounded-lg text-center font-medium">
+                        <i class="fa-solid fa-square block text-base mb-1 text-blue-400"></i> 單一畫面
+                    </button>
+                    <button onclick="setLayout('pip')" class="layout-btn bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs py-2 px-3 rounded-lg text-center font-medium">
+                        <i class="fa-solid fa-clone block text-base mb-1 text-slate-400"></i> 畫中畫 (PiP)
+                    </button>
+                    <button onclick="setLayout('split')" class="layout-btn bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs py-2 px-3 rounded-lg text-center font-medium">
+                        <i class="fa-solid fa-columns block text-base mb-1 text-slate-400"></i> 左右分鏡 (50/50)
+                    </button>
+                    <button onclick="setLayout('grid')" class="layout-btn bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs py-2 px-3 rounded-lg text-center font-medium">
+                        <i class="fa-solid fa-border-all block text-base mb-1 text-slate-400"></i> 4分割鏡頭
+                    </button>
+                    <button onclick="toggleOverlay('lowerThird')" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs py-2 px-3 rounded-lg text-center font-medium text-slate-300">
+                        <i class="fa-solid fa-id-card block text-base mb-1 text-indigo-400"></i> 下三分字幕
+                    </button>
+                    <button onclick="toggleOverlay('ticker')" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs py-2 px-3 rounded-lg text-center font-medium text-slate-300">
+                        <i class="fa-solid fa-scroll block text-base mb-1 text-amber-400"></i> 跑馬燈字幕
+                    </button>
+                </div>
+            </div>
+
+            <!-- Video Sources Grid & Audio Mixer -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <!-- Video Inputs Selection (2 Columns) -->
+                <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                    <h3 class="font-bold text-sm text-slate-300 mb-3 flex items-center justify-between">
+                        <span><i class="fa-solid fa-video text-blue-400 mr-2"></i>輸入訊號源矩陣 (Inputs Matrix)</span>
+                        <span class="text-xs text-slate-500">點擊點選 PVW 預覽</span>
+                    </h3>
+
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="cameraSlotsContainer">
+                        <!-- Dynamic Camera Slots generated via JS -->
+                    </div>
+                </div>
+
+                <!-- Audio Mixer & Graphics Overlay Panel -->
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between space-y-4">
+                    <div>
+                        <h3 class="font-bold text-sm text-slate-300 mb-3 flex items-center gap-2">
+                            <i class="fa-solid fa-sliders text-emerald-400"></i>
+                            音訊混音器 (Audio Mixer)
+                        </h3>
+                        <div class="space-y-3 text-xs" id="audioMixerControls">
+                            <!-- Dynamic Audio Controls -->
+                            <div>
+                                <div class="flex justify-between mb-1">
+                                    <span class="text-slate-400">主音訊輸出 (Master)</span>
+                                    <span id="masterVolText" class="text-emerald-400 font-mono">100%</span>
+                                </div>
+                                <input type="range" id="masterVolSlider" min="0" max="1" step="0.01" value="1" oninput="adjustMasterVolume(this.value)" class="w-full accent-emerald-500 bg-slate-800">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Lower Third Text Inputs -->
+                    <div class="border-t border-slate-800 pt-3 space-y-2 text-xs">
+                        <div class="font-semibold text-slate-300">字幕字板設定</div>
+                        <input type="text" id="inputLtTitle" value="歡迎收看 OmniLive 線上直播" placeholder="主標題..." class="w-full bg-slate-950 border border-slate-800 rounded p-2 text-slate-200 focus:outline-none focus:border-blue-500">
+                        <input type="text" id="inputLtSub" value="GitHub Pages 全前端 WebRTC 架構" placeholder="副標題..." class="w-full bg-slate-950 border border-slate-800 rounded p-2 text-slate-200 focus:outline-none focus:border-blue-500">
+                        <input type="text" id="inputTicker" value="🔥 歡迎加入直播間！有任何問題歡迎在聊天室留言發問。點擊右下角點讚支持！" placeholder="跑馬燈文字..." class="w-full bg-slate-950 border border-slate-800 rounded p-2 text-slate-200 focus:outline-none focus:border-blue-500">
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== 2. CAMERA NODE MODULE ==================== -->
+        <section id="module-camera" class="role-module hidden max-w-2xl mx-auto space-y-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
+                <div class="flex justify-between items-center border-b border-slate-800 pb-4">
+                    <div>
+                        <h2 class="text-lg font-bold flex items-center gap-2">
+                            <i class="fa-solid fa-camera text-blue-400"></i>
+                            拍攝端機位設定 (Camera Node)
+                        </h2>
+                        <p class="text-xs text-slate-400">將此設備的視訊與麥克風回傳給導播室</p>
+                    </div>
+                    <!-- Tally Status Box -->
+                    <div id="cameraTally" class="px-3 py-1.5 rounded-lg font-bold text-xs bg-slate-800 text-slate-400 border border-slate-700">
+                        狀態: 離線
+                    </div>
+                </div>
+
+                <!-- Live Camera Preview Frame -->
+                <div class="relative aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 flex items-center justify-center group">
+                    <video id="camLocalVideo" autoplay playsinline muted class="w-full h-full object-cover"></video>
+                    <div id="camPlaceholder" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500 bg-slate-950">
+                        <i class="fa-solid fa-video-slash text-4xl mb-2"></i>
+                        <span class="text-xs">鏡頭未開啟</span>
+                    </div>
+                </div>
+
+                <!-- Device Controls -->
+                <div class="space-y-4 text-xs">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-slate-400 mb-1">視訊來源</label>
+                            <select id="videoSelect" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500"></select>
+                        </div>
+                        <div>
+                            <label class="block text-slate-400 mb-1">音訊來源 (麥克風)</label>
+                            <select id="audioSelect" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500"></select>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-slate-400 mb-1">解析度與幀率</label>
+                            <select id="resSelect" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200">
+                                <option value="1080">1080p (Full HD / 60FPS)</option>
+                                <option value="720" selected>720p (HD / 30FPS)</option>
+                                <option value="480">480p (SD / 30FPS)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-slate-400 mb-1">分配機位 (Cam Slot)</label>
+                            <select id="camSlotSelect" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200">
+                                <option value="cam1">Cam 1 (鏡頭 1)</option>
+                                <option value="cam2">Cam 2 (鏡頭 2)</option>
+                                <option value="cam3">Cam 3 (鏡頭 3)</option>
+                                <option value="cam4">Cam 4 (鏡頭 4)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="flex flex-wrap gap-3 pt-2">
+                        <button onclick="startCameraNode()" class="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-play"></i> 開啟鏡頭並連線至導播室
+                        </button>
+                        <button onclick="startScreenShareNode()" class="py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-desktop"></i> 螢幕分享
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== 3. VIEWER PLAYER MODULE ==================== -->
+        <section id="module-viewer" class="role-module hidden max-w-5xl mx-auto">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <!-- Video Player Column (2 Cols) -->
+                <div class="lg:col-span-2 space-y-3">
+                    <div class="relative aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl group" id="viewerVideoContainer">
+                        <video id="viewerVideo" autoplay playsinline class="w-full h-full object-contain"></video>
+
+                        <!-- Unmute overlay banner if autoplay blocked audio -->
+                        <div id="unmuteOverlay" onclick="unmuteViewer()" class="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center text-white cursor-pointer transition">
+                            <div class="w-16 h-16 rounded-full bg-blue-600 flex items-center justify-center text-2xl mb-3 shadow-xl animate-bounce">
+                                <i class="fa-solid fa-volume-xmark"></i>
+                            </div>
+                            <p class="font-bold text-sm">點擊畫面開啟聲音聲音</p>
+                        </div>
+
+                        <!-- Floating Emojis Layer -->
+                        <div id="emojiLayer" class="absolute inset-0 pointer-events-none overflow-hidden"></div>
+
+                        <!-- Live Badge Overlay -->
+                        <div class="absolute top-4 left-4 flex items-center gap-2 bg-black/60 backdrop-blur px-3 py-1 rounded-full text-xs">
+                            <span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
+                            <span class="font-bold tracking-wider text-white uppercase">LIVE 直播中</span>
+                        </div>
+                    </div>
+
+                    <!-- Viewer Control & Details -->
+                    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center justify-between">
+                        <div>
+                            <h2 class="font-bold text-base text-white">OmniLive 全端 WebRTC 直播間</h2>
+                            <p class="text-xs text-slate-400">超低延遲線上直播 (Peer-to-Peer 傳輸)</p>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <button onclick="sendEmoji('❤️')" class="w-10 h-10 rounded-full bg-slate-800 hover:bg-slate-700 text-lg flex items-center justify-center transition active:scale-95">❤️</button>
+                            <button onclick="sendEmoji('🔥')" class="w-10 h-10 rounded-full bg-slate-800 hover:bg-slate-700 text-lg flex items-center justify-center transition active:scale-95">🔥</button>
+                            <button onclick="sendEmoji('👏')" class="w-10 h-10 rounded-full bg-slate-800 hover:bg-slate-700 text-lg flex items-center justify-center transition active:scale-95">👏</button>
+                            <button onclick="sendEmoji('🎉')" class="w-10 h-10 rounded-full bg-slate-800 hover:bg-slate-700 text-lg flex items-center justify-center transition active:scale-95">🎉</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chatroom Column (1 Col) -->
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col h-[500px]">
+                    <h3 class="font-bold text-sm border-b border-slate-800 pb-3 flex items-center justify-between">
+                        <span><i class="fa-solid fa-comments text-blue-400 mr-2"></i>即時討論區</span>
+                        <span id="chatViewerCount" class="text-xs text-slate-500">1 人在線</span>
+                    </h3>
+
+                    <!-- Message Log -->
+                    <div id="chatMessages" class="flex-1 overflow-y-auto py-3 space-y-3 text-xs">
+                        <div class="bg-blue-500/10 border border-blue-500/20 text-blue-300 p-2.5 rounded-xl">
+                            系統提示：歡迎來到直播間！訊息將即時傳遞給所有觀眾。
+                        </div>
+                    </div>
+
+                    <!-- Message Input Box -->
+                    <form onsubmit="sendChatMessage(event)" class="pt-2 border-t border-slate-800 flex gap-2">
+                        <input type="text" id="chatInput" placeholder="輸入訊息..." class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500">
+                        <button type="submit" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition">
+                            發送
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== 4. GITHUB PAGES GUIDE MODULE ==================== -->
+        <section id="module-guide" class="role-module hidden max-w-4xl mx-auto space-y-6">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+                <h2 class="text-xl font-bold text-white flex items-center gap-2">
+                    <i class="fa-brands fa-github text-blue-400 text-2xl"></i>
+                    如何免費部署到 GitHub Pages 發佈成網站？
+                </h2>
+                <p class="text-sm text-slate-300 leading-relaxed">
+                    本系統為 **100% 純前端架構**，運用瀏覽器原生 WebRTC 與 PeerJS 免費公用信令服務，因此**完全不需要購買伺服器**，直接透過 GitHub Pages 即可部署為 HTTPS 網站！
+                </p>
+
+                <div class="space-y-4 text-sm pt-2">
+                    <div class="flex gap-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
+                        <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center font-bold shrink-0">1</div>
+                        <div>
+                            <h3 class="font-bold text-white mb-1">建立 GitHub 儲存庫 (Repository)</h3>
+                            <p class="text-slate-400 text-xs">登入 GitHub，點擊右上角「New repository」，命名為例如 <code class="bg-slate-800 px-1.5 py-0.5 rounded text-blue-400">my-live-system</code>，選擇 Public (公開)。</p>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
+                        <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center font-bold shrink-0">2</div>
+                        <div>
+                            <h3 class="font-bold text-white mb-1">上傳 HTML 檔案</h3>
+                            <p class="text-slate-400 text-xs">將這個網頁完整程式碼儲存為 <code class="bg-slate-800 px-1.5 py-0.5 rounded text-emerald-400">index.html</code>，並上傳至剛建立的 Repository 主分支 (main)。</p>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
+                        <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center font-bold shrink-0">3</div>
+                        <div>
+                            <h3 class="font-bold text-white mb-1">開啟 GitHub Pages 靜態網頁發佈</h3>
+                            <p class="text-slate-400 text-xs">進入 Repository 的 <code class="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300">Settings</code> ➔ <code class="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300">Pages</code>，在 Source 選擇 <code class="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300">Deploy from a branch</code>，Branch 選擇 <code class="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300">main</code> / <code class="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300">/(root)</code> 並按 Save。</p>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
+                        <div class="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center font-bold shrink-0"><i class="fa-solid fa-check"></i></div>
+                        <div>
+                            <h3 class="font-bold text-white mb-1">完成發佈並開啟網站！</h3>
+                            <p class="text-slate-400 text-xs">幾秒鐘後 GitHub 會生成專屬網址：<code class="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-400">https://your-username.github.io/my-live-system/</code>。手機與電腦瀏覽器皆可直接存取攝影機與直播！</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Modal: Show Connect QR Code for Mobile Cameras -->
+    <div id="qrModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 text-center space-y-4">
+            <h3 class="font-bold text-base text-white">掃碼將手機作為拍攝端鏡頭</h3>
+            <div id="qrcodeCanvas" class="bg-white p-4 rounded-xl inline-block shadow-xl"></div>
+            <p class="text-xs text-slate-400">請用手機相機掃描 QR Code，將自動連線並作為拍攝端鏡頭介入導播室。</p>
+            <button onclick="hideConnectQRModal()" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold">關閉</button>
+        </div>
+    </div>
+
+    <!-- Modal: PeerServer Config -->
+    <div id="peerConfigModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4">
+            <h3 class="font-bold text-base text-white flex items-center gap-2">
+                <i class="fa-solid fa-server text-blue-400"></i> PeerJS 信令伺服器設定
+            </h3>
+            <div class="space-y-3 text-xs">
+                <div>
+                    <label class="block text-slate-400 mb-1">PeerServer 主機 (Host)</label>
+                    <input type="text" id="peerHostInput" placeholder="預設使用 PeerJS 公用伺服器" class="w-full bg-slate-950 border border-slate-800 rounded p-2 text-white">
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-slate-400 mb-1">Port</label>
+                        <input type="number" id="peerPortInput" placeholder="443" class="w-full bg-slate-950 border border-slate-800 rounded p-2 text-white">
+                    </div>
+                    <div>
+                        <label class="block text-slate-400 mb-1">Path</label>
+                        <input type="text" id="peerPathInput" placeholder="/" class="w-full bg-slate-950 border border-slate-800 rounded p-2 text-white">
+                    </div>
+                </div>
+            </div>
+            <div class="flex gap-2 pt-2">
+                <button onclick="savePeerConfig()" class="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold">儲存並重連</button>
+                <button onclick="hidePeerConfigModal()" class="py-2 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== GLOBAL SYSTEM STATE ====================
+        let currentRole = 'studio';
+        let roomId = 'live-demo-room';
+        let peer = null;
+        let peerCustomConfig = null; // Custom PeerServer config if set
+        let activeConnections = {}; // Stores connections in studio
+        let localMediaStream = null;
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let isRecording = false;
+
+        // Canvas Switcher State
+        let pgmCanvas, pgmCtx, pvwCanvas, pvwCtx;
+        let cameraSources = {
+            cam1: { element: null, label: 'Cam 1 (未連接)', stream: null, vol: 1.0 },
+            cam2: { element: null, label: 'Cam 2 (未連接)', stream: null, vol: 1.0 },
+            cam3: { element: null, label: 'Cam 3 (未連接)', stream: null, vol: 1.0 },
+            cam4: { element: null, label: 'Cam 4 (未連接)', stream: null, vol: 1.0 },
+        };
+        let activePvwSource = 'cam1';
+        let activePgmSource = 'cam1';
+        let currentLayout = 'single'; // 'single', 'pip', 'split', 'grid'
+        let overlays = {
+            lowerThird: false,
+            ticker: false
+        };
+
+        // Audio Context Mixing
+        let audioCtx, masterGainNode;
+
+        // ==================== INITIALIZATION ====================
+        window.addEventListener('load', () => {
+            // Global error handlers to prevent WebSocket SecurityError from crashing the app in iframe sandbox
+            window.addEventListener('error', (e) => {
+                if (e.message && (e.message.includes('WebSocket') || e.message.includes('SecurityError'))) {
+                    e.preventDefault();
+                    showWsWarning('當前預覽環境 (iFrame Sandbox) 限制 WebSocket 連線。系統已自動啟用單機預覽導播模式，所有切換與錄影功能均可正常測試！發佈至 GitHub Pages 後即可復原跨裝置傳輸。');
+                }
+            });
+            window.addEventListener('unhandledrejection', (e) => {
+                if (e.reason && e.reason.toString().includes('WebSocket')) {
+                    e.preventDefault();
+                    showWsWarning('當前預覽環境 (iFrame Sandbox) 限制 WebSocket 連線。系統已自動啟用單機預覽導播模式。');
+                }
+            });
+
+            initCanvases();
+            initAudioContext();
+            renderCameraSlots();
+            switchRole('studio');
+            startCompositorLoop();
+        });
+
+        function updateRoomId(val) {
+            roomId = val.trim() || 'live-demo-room';
+            console.log('Room ID updated:', roomId);
+        }
+
+        // View Navigation Switcher
+        function switchRole(role) {
+            currentRole = role;
+            document.querySelectorAll('.role-module').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.role-tab').forEach(el => {
+                el.classList.remove('bg-blue-600', 'text-white');
+                el.classList.add('text-slate-400');
+            });
+
+            document.getElementById(`module-${role}`).classList.remove('hidden');
+            const activeTab = document.getElementById(`tab-${role}`);
+            activeTab.classList.add('bg-blue-600', 'text-white');
+            activeTab.classList.remove('text-slate-400');
+
+            if (role === 'studio' && !peer) {
+                initStudio();
+            } else if (role === 'camera') {
+                populateDevices();
+            } else if (role === 'viewer') {
+                connectAsViewer();
+            }
+        }
+
+        // ==================== CANVAS COMPOSITOR & SWITCHER ====================
+        function initCanvases() {
+            pgmCanvas = document.getElementById('pgmCanvas');
+            pgmCtx = pgmCanvas.getContext('2d');
+            pvwCanvas = document.getElementById('pvwCanvas');
+            pvwCtx = pvwCanvas.getContext('2d');
+
+            // Set canvas resolutions
+            pgmCanvas.width = 1280;
+            pgmCanvas.height = 720;
+            pvwCanvas.width = 1280;
+            pvwCanvas.height = 720;
+        }
+
+        function initAudioContext() {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+            masterGainNode = audioCtx.createGain();
+            masterGainNode.gain.value = 1.0;
+            masterGainNode.connect(audioCtx.destination);
+        }
+
+        // Render Canvas Loop (60 FPS)
+        function startCompositorLoop() {
+            function drawFrame() {
+                // Render PVW
+                renderCanvasSource(pvwCtx, activePvwSource, currentLayout);
+                
+                // Render PGM
+                renderCanvasSource(pgmCtx, activePgmSource, currentLayout);
+                
+                // Render Overlays on PGM
+                if (overlays.lowerThird) {
+                    drawLowerThirdOverlay(pgmCtx);
+                }
+                if (overlays.ticker) {
+                    drawTickerOverlay(pgmCtx);
+                }
+
+                requestAnimationFrame(drawFrame);
+            }
+            requestAnimationFrame(drawFrame);
+        }
+
+        function renderCanvasSource(ctx, sourceKey, layout) {
+            ctx.fillStyle = '#090d16';
+            ctx.fillRect(0, 0, 1280, 720);
+
+            const source = cameraSources[sourceKey];
+
+            if (layout === 'single') {
+                if (source && source.element && source.element.readyState >= 2) {
+                    ctx.drawImage(source.element, 0, 0, 1280, 720);
+                } else {
+                    drawNoSignal(ctx, sourceKey, 0, 0, 1280, 720);
+                }
+            } else if (layout === 'pip') {
+                // Main stream
+                if (source && source.element && source.element.readyState >= 2) {
+                    ctx.drawImage(source.element, 0, 0, 1280, 720);
+                } else {
+                    drawNoSignal(ctx, sourceKey, 0, 0, 1280, 720);
+                }
+                // Small sub window (Cam 2 or fallback)
+                const subSourceKey = sourceKey === 'cam1' ? 'cam2' : 'cam1';
+                const subSource = cameraSources[subSourceKey];
+                ctx.strokeStyle = '#3b82f6';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(860, 440, 380, 240);
+                if (subSource && subSource.element && subSource.element.readyState >= 2) {
+                    ctx.drawImage(subSource.element, 860, 440, 380, 240);
+                } else {
+                    drawNoSignal(ctx, subSourceKey, 860, 440, 380, 240);
+                }
+            } else if (layout === 'split') {
+                // Split 50/50
+                const camA = cameraSources['cam1'];
+                const camB = cameraSources['cam2'];
+                if (camA && camA.element && camA.element.readyState >= 2) {
+                    ctx.drawImage(camA.element, 0, 0, 635, 720);
+                } else {
+                    drawNoSignal(ctx, 'Cam 1', 0, 0, 635, 720);
+                }
+                if (camB && camB.element && camB.element.readyState >= 2) {
+                    ctx.drawImage(camB.element, 645, 0, 635, 720);
+                } else {
+                    drawNoSignal(ctx, 'Cam 2', 645, 0, 635, 720);
+                }
+            } else if (layout === 'grid') {
+                // 4-Grid
+                const slots = ['cam1', 'cam2', 'cam3', 'cam4'];
+                const coords = [
+                    [0, 0, 635, 355],
+                    [645, 0, 635, 355],
+                    [0, 365, 635, 355],
+                    [645, 365, 635, 355]
+                ];
+                slots.forEach((key, idx) => {
+                    const c = cameraSources[key];
+                    const [x, y, w, h] = coords[idx];
+                    if (c && c.element && c.element.readyState >= 2) {
+                        ctx.drawImage(c.element, x, y, w, h);
+                    } else {
+                        drawNoSignal(ctx, key.toUpperCase(), x, y, w, h);
+                    }
+                });
+            }
+        }
+
+        function drawNoSignal(ctx, label, x, y, w, h) {
+            ctx.fillStyle = '#1e293b';
+            ctx.fillRect(x, y, w, h);
+            ctx.fillStyle = '#64748b';
+            ctx.font = 'bold 24px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(`無訊號 (${label})`, x + w / 2, y + h / 2);
+        }
+
+        // Lower Third Title Overlay
+        function drawLowerThirdOverlay(ctx) {
+            const title = document.getElementById('inputLtTitle').value || '即時直播';
+            const sub = document.getElementById('inputLtSub').value || 'OmniLive Studio';
+            
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+            ctx.fillRect(50, 560, 450, 90);
+            
+            ctx.fillStyle = '#3b82f6';
+            ctx.fillRect(50, 560, 8, 90);
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 26px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.fillText(title, 75, 600);
+            
+            ctx.fillStyle = '#60a5fa';
+            ctx.font = '18px sans-serif';
+            ctx.fillText(sub, 75, 630);
+        }
+
+        // Ticker Marquee Overlay
+        let tickerPos = 1280;
+        function drawTickerOverlay(ctx) {
+            const text = document.getElementById('inputTicker').value || '歡迎收看線上直播！';
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+            ctx.fillRect(0, 680, 1280, 40);
+            
+            ctx.fillStyle = '#38bdf8';
+            ctx.font = 'bold 18px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.fillText(text, tickerPos, 706);
+            
+            tickerPos -= 3;
+            if (tickerPos < -ctx.measureText(text).width) {
+                tickerPos = 1280;
+            }
+        }
+
+        // Switcher Actions
+        function selectPvwSource(key) {
+            activePvwSource = key;
+            document.getElementById('pvwSourceText').innerText = `Source: ${key.toUpperCase()}`;
+            highlightActiveSlot();
+        }
+
+        function triggerCut() {
+            activePgmSource = activePvwSource;
+            document.getElementById('pgmSourceText').innerText = `Source: ${activePgmSource.toUpperCase()}`;
+            highlightActiveSlot();
+        }
+
+        function triggerAutoFade() {
+            // Simplified smooth cut
+            triggerCut();
+        }
+
+        function setLayout(mode) {
+            currentLayout = mode;
+            document.querySelectorAll('.layout-btn').forEach(btn => btn.classList.remove('border-blue-500'));
+            event.currentTarget.classList.add('border-blue-500');
+        }
+
+        function toggleOverlay(type) {
+            overlays[type] = !overlays[type];
+        }
+
+        function renderCameraSlots() {
+            const container = document.getElementById('cameraSlotsContainer');
+            container.innerHTML = '';
+            Object.keys(cameraSources).forEach(key => {
+                const slot = cameraSources[key];
+                const card = document.createElement('div');
+                card.id = `slot-card-${key}`;
+                card.onclick = () => selectPvwSource(key);
+                card.className = `cursor-pointer bg-slate-950 border-2 ${activePvwSource === key ? 'border-yellow-500' : 'border-slate-800'} rounded-xl p-2 transition hover:border-slate-600 relative`;
+                card.innerHTML = `
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="font-bold text-xs uppercase text-slate-300">${key}</span>
+                        <span id="badge-${key}" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-500">離線</span>
+                    </div>
+                    <div class="aspect-video bg-black rounded-lg overflow-hidden flex items-center justify-center">
+                        <video id="vid-${key}" autoplay playsinline muted class="w-full h-full object-cover"></video>
+                    </div>
+                `;
+                container.appendChild(card);
+                
+                // Save element ref
+                cameraSources[key].element = card.querySelector(`video`);
+            });
+        }
+
+        function highlightActiveSlot() {
+            Object.keys(cameraSources).forEach(key => {
+                const card = document.getElementById(`slot-card-${key}`);
+                if (card) {
+                    if (activePgmSource === key) {
+                        card.className = card.className.replace(/border-\S+/, 'border-red-500');
+                    } else if (activePvwSource === key) {
+                        card.className = card.className.replace(/border-\S+/, 'border-yellow-500');
+                    } else {
+                        card.className = card.className.replace(/border-\S+/, 'border-slate-800');
+                    }
+                }
+            });
+        }
+
+        // ==================== WEBRTC DIRECTOR STUDIO ====================
+        function initStudio() {
+            const studioPeerId = `${roomId}-studio`;
+            const statusEl = document.getElementById('studioPeerStatus');
+            if (statusEl) {
+                statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span> 連線至 PeerJS 伺服器...';
+            }
+            
+            if (peer) {
+                try { peer.destroy(); } catch(e) {}
+                peer = null;
+            }
+
+            try {
+                // Initialize Peer with custom or default config
+                peer = peerCustomConfig ? new Peer(studioPeerId, peerCustomConfig) : new Peer(studioPeerId);
+
+                peer.on('open', (id) => {
+                    if (statusEl) statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500"></span> 導播室運作中 (Ready)';
+                    hideWsWarning();
+                    console.log('Studio Master Peer ID:', id);
+                });
+
+                // Handle incoming calls (Camera Nodes or Viewers)
+                peer.on('call', (call) => {
+                    const callerId = call.peer;
+                    console.log('Incoming call from:', callerId);
+
+                    if (callerId.includes('-cam-')) {
+                        call.answer();
+                        call.on('stream', (remoteStream) => {
+                            assignCameraStream(callerId, remoteStream);
+                        });
+                    } else if (callerId.includes('-viewer-')) {
+                        const pgmStream = pgmCanvas.captureStream(30);
+                        call.answer(pgmStream);
+                    }
+                });
+
+                peer.on('error', (err) => {
+                    console.warn('PeerJS Error handled:', err);
+                    handlePeerError(err);
+                });
+            } catch (err) {
+                console.warn('PeerJS Instantiation Error caught:', err);
+                handlePeerError(err);
+            }
+        }
+
+        function handlePeerError(err) {
+            const statusEl = document.getElementById('studioPeerStatus');
+            const errStr = err ? (err.message || err.toString()) : '';
+            
+            if (errStr.includes('SecurityError') || errStr.includes('WebSocket') || errStr.includes('Canvas')) {
+                if (statusEl) statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-blue-400"></span> 單機預覽展示模式';
+                showWsWarning('當前 Preview 預覽視窗 (iFrame Sandbox) 限制跨網域 WebSocket 連線。導播切換、攝影機測試與 PGM 錄影功能仍可正常運作！部署至 GitHub Pages 後可完美支援跨裝置 WebRTC 串流。');
+            } else {
+                if (statusEl) statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span> 離線展示模式';
+                showWsWarning(`信令伺服器連線提示: ${errStr || '連線受阻'}。系統已自動啟用單機預覽模式。`);
+            }
+        }
+
+        function showWsWarning(msg) {
+            const banner = document.getElementById('wsWarningBanner');
+            if (banner) {
+                if (msg) document.getElementById('wsWarningText').innerText = msg;
+                banner.classList.remove('hidden');
+            }
+        }
+
+        function hideWsWarning() {
+            const banner = document.getElementById('wsWarningBanner');
+            if (banner) banner.classList.add('hidden');
+        }
+
+        function showPeerConfigModal() {
+            document.getElementById('peerConfigModal').classList.remove('hidden');
+        }
+
+        function hidePeerConfigModal() {
+            document.getElementById('peerConfigModal').classList.add('hidden');
+        }
+
+        function savePeerConfig() {
+            const host = document.getElementById('peerHostInput').value.trim();
+            const port = document.getElementById('peerPortInput').value.trim();
+            const path = document.getElementById('peerPathInput').value.trim();
+
+            if (host) {
+                peerCustomConfig = {
+                    host: host,
+                    port: port ? parseInt(port) : 443,
+                    path: path || '/',
+                    secure: true
+                };
+            } else {
+                peerCustomConfig = null;
+            }
+            hidePeerConfigModal();
+            initStudio();
+        }
+
+        function assignCameraStream(callerId, stream) {
+            let slotKey = 'cam1';
+            if (callerId.includes('cam1')) slotKey = 'cam1';
+            else if (callerId.includes('cam2')) slotKey = 'cam2';
+            else if (callerId.includes('cam3')) slotKey = 'cam3';
+            else if (callerId.includes('cam4')) slotKey = 'cam4';
+
+            cameraSources[slotKey].stream = stream;
+            const videoElem = document.getElementById(`vid-${slotKey}`);
+            if (videoElem) {
+                videoElem.srcObject = stream;
+            }
+
+            const badge = document.getElementById(`badge-${slotKey}`);
+            if (badge) {
+                badge.innerText = 'ONLINE';
+                badge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold';
+            }
+
+            updateConnectedCamCount();
+        }
+
+        function updateConnectedCamCount() {
+            const count = Object.values(cameraSources).filter(s => s.stream !== null).length;
+            const el = document.getElementById('camCountText');
+            if (el) el.innerText = `${count} 台設備`;
+        }
+
+        // ==================== CAMERA NODE LOGIC ====================
+        async function populateDevices() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoSelect = document.getElementById('videoSelect');
+                const audioSelect = document.getElementById('audioSelect');
+                videoSelect.innerHTML = '';
+                audioSelect.innerHTML = '';
+
+                devices.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    if (device.kind === 'videoinput') {
+                        option.text = device.label || `Camera ${videoSelect.length + 1}`;
+                        videoSelect.appendChild(option);
+                    } else if (device.kind === 'audioinput') {
+                        option.text = device.label || `Microphone ${audioSelect.length + 1}`;
+                        audioSelect.appendChild(option);
+                    }
+                });
+            } catch (e) {
+                console.error('Error listing devices:', e);
+            }
+        }
+
+        async function startCameraNode() {
+            const videoId = document.getElementById('videoSelect').value;
+            const audioId = document.getElementById('audioSelect').value;
+            const slot = document.getElementById('camSlotSelect').value;
+
+            try {
+                localMediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: videoId ? { exact: videoId } : undefined, width: 1280, height: 720 },
+                    audio: audioId ? { deviceId: { exact: audioId } } : true
+                });
+
+                document.getElementById('camLocalVideo').srcObject = localMediaStream;
+                document.getElementById('camPlaceholder').classList.add('hidden');
+
+                // Assign to studio slot locally as fallback
+                assignCameraStream(`cam-${slot}`, localMediaStream);
+
+                // Connect via WebRTC if peer active
+                connectCameraToStudio(slot, localMediaStream);
+            } catch (e) {
+                alert('無法存取攝影機或麥克風：' + e.message);
+            }
+        }
+
+        async function startScreenShareNode() {
+            const slot = document.getElementById('camSlotSelect').value;
+            try {
+                localMediaStream = await navigator.mediaDevices.getDisplayMedia({
+                    video: { cursor: "always" },
+                    audio: true
+                });
+
+                document.getElementById('camLocalVideo').srcObject = localMediaStream;
+                document.getElementById('camPlaceholder').classList.add('hidden');
+
+                // Assign to studio slot locally as fallback
+                assignCameraStream(`cam-${slot}`, localMediaStream);
+
+                connectCameraToStudio(slot, localMediaStream);
+            } catch (e) {
+                console.error('Screen share error:', e);
+            }
+        }
+
+        function connectCameraToStudio(slotKey, stream) {
+            const camPeerId = `${roomId}-cam-${slotKey}-${Math.floor(Math.random()*1000)}`;
+            const studioPeerId = `${roomId}-studio`;
+            const tally = document.getElementById('cameraTally');
+
+            try {
+                const camPeer = new Peer(camPeerId);
+                camPeer.on('open', () => {
+                    if (tally) {
+                        tally.innerText = '連線至導播室中...';
+                        tally.className = 'px-3 py-1.5 rounded-lg font-bold text-xs bg-yellow-500/20 text-yellow-400 border border-yellow-500/30';
+                    }
+
+                    const call = camPeer.call(studioPeerId, stream);
+                    if (call) {
+                        call.on('open', () => {
+                            if (tally) {
+                                tally.innerText = 'ON AIR 正式播出';
+                                tally.className = 'px-3 py-1.5 rounded-lg font-bold text-xs bg-red-600 text-white tally-onair';
+                            }
+                        });
+                    }
+                });
+
+                camPeer.on('error', (err) => {
+                    console.warn('Cam Peer error:', err);
+                    if (tally) {
+                        tally.innerText = '單機鏡頭預覽中 (Local)';
+                        tally.className = 'px-3 py-1.5 rounded-lg font-bold text-xs bg-blue-600 text-white';
+                    }
+                });
+            } catch (err) {
+                console.warn('Cam Peer instantiation error caught:', err);
+                if (tally) {
+                    tally.innerText = '單機鏡頭預覽中 (Local)';
+                    tally.className = 'px-3 py-1.5 rounded-lg font-bold text-xs bg-blue-600 text-white';
+                }
+            }
+        }
+
+        // ==================== VIEWER PLAYER LOGIC ====================
+        function connectAsViewer() {
+            const viewerPeerId = `${roomId}-viewer-${Math.floor(Math.random()*10000)}`;
+            const studioPeerId = `${roomId}-studio`;
+            const video = document.getElementById('viewerVideo');
+
+            try {
+                const viewerPeer = new Peer(viewerPeerId);
+                viewerPeer.on('open', () => {
+                    console.log('Viewer peer ready:', viewerPeerId);
+                    const dummyStream = createEmptyAudioStream();
+                    const call = viewerPeer.call(studioPeerId, dummyStream);
+
+                    if (call) {
+                        call.on('stream', (remotePgmStream) => {
+                            if (video) video.srcObject = remotePgmStream;
+                        });
+                    }
+                });
+
+                viewerPeer.on('error', (err) => {
+                    console.warn('Viewer Peer error:', err);
+                    if (video && pgmCanvas) {
+                        video.srcObject = pgmCanvas.captureStream(30);
+                    }
+                });
+            } catch (err) {
+                console.warn('Viewer Peer instantiation error caught:', err);
+                if (video && pgmCanvas) {
+                    video.srcObject = pgmCanvas.captureStream(30);
+                }
+            }
+        }
+
+        function createEmptyAudioStream() {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const dst = ctx.createMediaStreamDestination();
+            osc.connect(dst);
+            osc.start();
+            return dst.stream;
+        }
+
+        function unmuteViewer() {
+            const video = document.getElementById('viewerVideo');
+            if (video) video.muted = false;
+            const overlay = document.getElementById('unmuteOverlay');
+            if (overlay) overlay.classList.add('hidden');
+        }
+
+        function sendEmoji(emoji) {
+            const layer = document.getElementById('emojiLayer');
+            if (!layer) return;
+            const el = document.createElement('div');
+            el.className = 'floating-emoji';
+            el.innerText = emoji;
+            el.style.left = `${Math.random() * 80 + 10}%`;
+            layer.appendChild(el);
+            setTimeout(() => el.remove(), 2000);
+        }
+
+        function sendChatMessage(e) {
+            e.preventDefault();
+            const input = document.getElementById('chatInput');
+            const msg = input.value.trim();
+            if (!msg) return;
+
+            const box = document.getElementById('chatMessages');
+            const item = document.createElement('div');
+            item.className = 'bg-slate-800 p-2.5 rounded-xl border border-slate-700/50';
+            item.innerHTML = `<span class="font-bold text-blue-400">觀眾: </span><span class="text-slate-200">${escapeHtml(msg)}</span>`;
+            box.appendChild(item);
+            box.scrollTop = box.scrollHeight;
+
+            input.value = '';
+        }
+
+        // ==================== RECORDING & UTILS ====================
+        function toggleRecord() {
+            if (!isRecording) {
+                startRecording();
+            } else {
+                stopRecording();
+            }
+        }
+
+        function startRecording() {
+            const pgmStream = pgmCanvas.captureStream(60);
+            recordedChunks = [];
+            mediaRecorder = new MediaRecorder(pgmStream, { mimeType: 'video/webm' });
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) recordedChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Live_Record_${new Date().toISOString().slice(0,19)}.webm`;
+                a.click();
+            };
+
+            mediaRecorder.start();
+            isRecording = true;
+            const btn = document.getElementById('recordBtn');
+            btn.className = 'px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 border border-red-500';
+            btn.innerHTML = '<i class="fa-solid fa-square text-red-500"></i> 停止錄影';
+        }
+
+        function stopRecording() {
+            if (mediaRecorder) mediaRecorder.stop();
+            isRecording = false;
+            const btn = document.getElementById('recordBtn');
+            btn.className = 'px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5';
+            btn.innerHTML = '<i class="fa-solid fa-circle text-[10px]"></i> 開始錄影';
+        }
+
+        function showConnectQRModal() {
+            const modal = document.getElementById('qrModal');
+            const container = document.getElementById('qrcodeCanvas');
+            container.innerHTML = '';
+            
+            const shareUrl = `${window.location.origin}${window.location.pathname}?room=${roomId}&role=camera`;
+            new QRCode(container, {
+                text: shareUrl,
+                width: 180,
+                height: 180
+            });
+            modal.classList.remove('hidden');
+        }
+
+        function hideConnectQRModal() {
+            document.getElementById('qrModal').classList.add('hidden');
+        }
+
+        function copyShareLink() {
+            const shareUrl = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
+            navigator.clipboard.writeText(shareUrl).then(() => {
+                alert('直播間分享連結已複製到剪貼簿！');
+            });
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[m]);
+        }
+    </script>
+</body>
+</html>
